@@ -1,0 +1,19 @@
+# Large / licensed geospatial inputs (keep out of git)
+data/iucn/
+
+# Local caches / outputs
+outputs/
+models/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local environment / editor
+.venv/
+.cursor/
+
+# Raw audio and derived training data (large)
+audio_clips/
+data/
+

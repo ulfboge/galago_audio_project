@@ -1,0 +1,113 @@
+Here’s a concise, **repo-level summary** you can drop into a README or use as a handover note when moving the project into **Cursor**.
+
+---
+
+## Galago Audio Project – Repository Summary
+
+### What this repository is about
+
+This repository contains an **early-stage machine learning pipeline for automatic galago (bushbaby) species identification from audio recordings**.
+The core idea is to take short audio clips (WAV files), extract features, and use a trained neural network to predict the most likely galago species based on vocalizations.
+
+The project is exploratory and research-driven, aimed at:
+
+* Testing whether species-level identification from calls is feasible
+* Evaluating model performance across a limited but curated call library
+* Building a foundation that could later support a simple app or batch-processing tool
+
+The repository focuses on **inference, evaluation, and experimentation**, rather than a polished end-user application.
+
+---
+
+### What currently exists in the repo
+
+The codebase includes:
+
+**1. Batch prediction scripts**
+
+* Scripts that run a trained neural network on folders of WAV files
+* Output top-N predictions per file (e.g. top-6 or top-7 species)
+* Variants include:
+
+  * Full-clip predictions
+  * Windowed / sliding-window predictions for longer recordings
+
+**2. Evaluation utilities**
+
+* Scripts to compute confusion matrices for trained models
+* Separate evaluation logic for different class configurations (e.g. 6-species vs 7-species models)
+* Tools to inspect where the model confuses species
+
+**3. Result inspection & summarization**
+
+* Scripts to:
+
+  * Inspect prediction outputs
+  * Count detections per species
+  * Sanity-check model behavior across datasets
+
+**4. Supporting artifacts**
+
+* File lists for batch processing
+* Intermediate outputs used for debugging and comparison
+
+---
+
+### What is *not* yet in place
+
+* No unified training pipeline (training likely happened elsewhere or ad-hoc)
+* No clear model versioning or experiment tracking
+* No standardized data schema or metadata handling
+* No packaging as a library or app
+* No documentation explaining which script is “authoritative”
+* No automated tests
+
+---
+
+### Current project stage
+
+**Stage: Early prototype / proof-of-concept**
+
+More specifically:
+
+* ✔️ Model inference works
+* ✔️ Multi-species classification is functional
+* ✔️ Evaluation scripts exist and are usable
+* ❌ Code organization is still experimental
+* ❌ Script purposes overlap and naming reflects iteration rather than design
+* ❌ Not yet ready for external users or reproducible research
+
+This is a **research sandbox**, not yet a production or publication-ready codebase.
+
+---
+
+### Why moving this to Cursor makes sense
+
+Cursor is well suited for the **next phase**, which likely includes:
+
+* Refactoring scripts into clearer modules (data → inference → evaluation)
+* Adding README-level documentation and script responsibilities
+* Consolidating duplicate logic (top-6 vs top-7, windowed vs non-windowed)
+* Introducing configuration files instead of hard-coded paths
+* Preparing the project for either:
+
+  * A small demo app, or
+  * A more formal research pipeline
+
+---
+
+### Suggested next milestone (optional)
+
+A natural next step after moving to Cursor would be:
+
+* Define **one canonical inference script**
+* Define **one canonical evaluation workflow**
+* Add a high-level README diagram explaining the flow
+
+If you want, I can also:
+
+* Propose a **clean repo structure**
+* Write a **Cursor-friendly TODO roadmap**
+* Help you label which scripts are legacy vs active
+
+Just say the word.
