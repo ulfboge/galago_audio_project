@@ -8,4 +8,5 @@ numpy>=1.26.0,<3
 python-dotenv>=1.0.0
 scipy>=1.11.0
 soundfile>=0.12.0
-tensorflow-cpu>=2.15.0,<2.19
+# HF Spaces builder uses Python 3.13; TF<2.20 has no cp313 wheels on Linux.
+tensorflow-cpu>=2.20.0,<2.22
