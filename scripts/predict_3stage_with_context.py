@@ -46,12 +46,21 @@ RMS_GATE_REL = 0.20          # keep windows with rms >= max_rms * RMS_GATE_REL
 RMS_GATE_ABS = 1e-4          # always drop near-silence windows
 POOL_TOPK_WINDOWS = 3        # number of windows to pool across after gating
 
+# Simple temporal consistency rule (optional):
+# require the same top-1 class to appear in at least N of the pooled windows
+# before returning a confident label. Set to 0 to disable.
+CONSENSUS_MIN_COUNT = 0
+
 # Thresholds
 DETECTOR_THRESHOLD = 0.3  # Lowered from 0.7 to 0.5 to 0.3 to allow Otolemur through
 # NOTE: We tune this based on desired coverage on the raw_audio WAV evaluation.
 # If you want the system to return a label most of the time, use ~0.20–0.30.
 # (On the 69-WAV set, 0.20 yields ~94% coverage.)
-CLASSIFIER_THRESHOLD = 0.2
+# Default confidence threshold for emitting a species label.
+# On the 69-file raw_audio eval with the boosted 19-class model:
+# - 0.20–0.30 yields ~100% coverage but lower reliability per prediction
+# - 0.35 yields ~80% coverage with higher accuracy among covered predictions
+CLASSIFIER_THRESHOLD = 0.35
 # Note: With 16+ classes, max probability is naturally lower (~6.25% uniform baseline at 16 classes).
 CONTEXT_ALPHA = 0.5  # Weight for context priors
 
@@ -62,6 +71,7 @@ CONTEXT_ALPHA = 0.5  # Weight for context priors
 CLASSIFIER_TEMPERATURE = 0.212
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROFILES_JSON = PROJECT_ROOT / "configs" / "deployment_profiles.json"
 
 # Model paths
 DETECTOR_PATH = PROJECT_ROOT / "models" / "detector" / "galago_detector_best.keras"
@@ -144,7 +154,10 @@ def wav_window_to_rgb_fixed(y: np.ndarray, sr: int) -> np.ndarray:
         S_norm = (S_padded - S_min) / (S_max - S_min)
     cmap = plt.colormaps["magma"]
     S_rgb = cmap(S_norm)[:, :, :3]
-    S_rgb_float = (S_rgb * 255.0).astype(np.float32)
+    # Flip vertically to match training PNGs (generated with plt.imshow origin='lower',
+    # which stores high-frequency bands at the top of the PNG file).
+    # Also normalize to [0, 1] as training code does tf.cast / 255.0.
+    S_rgb_float = S_rgb[::-1].astype(np.float32)
     return S_rgb_float[np.newaxis, :, :, :]
 
 def rms_energy(y: np.ndarray) -> float:
@@ -218,6 +231,7 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
     starts = select_active_windows(starts, y, sr)
     probs_list = []
     conf_list = []
+    top1_idx_list = []
     
     for start in starts:
         end = start + int(WINDOW_SEC * sr)
@@ -231,6 +245,7 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
         probs = classifier_model.predict(rgb, verbose=0)[0]
         probs_list.append(probs)
         conf_list.append(float(np.max(probs)))
+        top1_idx_list.append(int(np.argmax(probs)))
     
     if not probs_list:
         return None, 0, None
@@ -241,6 +256,7 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
         return None, 0, None
     top_idx = np.argsort(np.asarray(conf_list))[-k:]
     selected = [probs_list[i] for i in top_idx]
+    selected_top1_idx = [top1_idx_list[i] for i in top_idx]
     avg_probs = np.mean(selected, axis=0)
     # Safety: normalize (should already sum to 1.0)
     s = float(np.sum(avg_probs))
@@ -257,11 +273,301 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
         if s2 > 0:
             avg_probs = scaled / s2
 
-    return avg_probs, len(starts_all), avg_probs
+    return avg_probs, len(starts_all), avg_probs, selected_top1_idx, k
 
 def topk(probs: np.ndarray, class_names: list, k: int) -> list:
     top_indices = np.argsort(probs)[-k:][::-1]
     return [(class_names[i], probs[i]) for i in top_indices]
+
+
+def infer_location_for_file(wav_path: Path) -> tuple[str | None, str]:
+    """Infer Tanzania context from place tokens in filename (Pugu / Rondo)."""
+    s = wav_path.name
+    if re.search(r"\bPugu\b", s, flags=re.IGNORECASE):
+        return "Tanzania", "filename:Pugu"
+    if re.search(r"\bRondo\b", s, flags=re.IGNORECASE):
+        return "Tanzania", "filename:Rondo"
+    return None, "none"
+
+
+def resolve_class_names_for_classifier(classifier_model) -> tuple[list, Path]:
+    """Pick class_names JSON to match classifier output dimension."""
+    n_out = int(classifier_model.output_shape[1])
+    if n_out == 16 and CLASS_NAMES_PATH_16.exists():
+        names_path = CLASS_NAMES_PATH_16
+    elif n_out == 17 and CLASS_NAMES_PATH_17.exists():
+        names_path = CLASS_NAMES_PATH_17
+    elif n_out == 19 and CLASS_NAMES_PATH_19.exists():
+        names_path = CLASS_NAMES_PATH_19
+    else:
+        names_path = CLASS_NAMES_PATH_FALLBACK
+    with open(names_path, "r", encoding="utf-8") as f:
+        names = json.load(f)
+    if not isinstance(names, list):
+        raise ValueError(f"{names_path.name} must be a JSON list of class name strings.")
+    if len(names) != n_out:
+        raise ValueError(
+            f"Classifier output dim is {n_out} but {names_path.name} lists {len(names)} labels. "
+            f"Add or fix models/all_species/class_names_{n_out}.json for this model."
+        )
+    return names, names_path
+
+
+def run_single_wav(
+    wav: Path,
+    *,
+    detector,
+    classifier,
+    class_names: list,
+    location: str | None,
+    month: int | None,
+    hour: int | None,
+    lat: float | None,
+    lon: float | None,
+    location_map: dict | None,
+    infer_location_from_filename: bool,
+    detector_threshold: float,
+    classifier_threshold: float,
+    pool_topk: int,
+    rms_gate_rel: float,
+    rms_gate_abs: float,
+    classifier_temperature: float,
+    consensus_min_count: int,
+    context_alpha: float,
+    threshold_on: str,
+    platt_coef: float | None,
+    platt_intercept: float | None,
+    postprocess_mode: str,
+) -> dict:
+    """
+    Run detector + classifier + context + gates for one WAV.
+    Mutates module-level pool/RMS/temperature/consensus globals used by predict_classifier.
+    """
+    globals()["POOL_TOPK_WINDOWS"] = pool_topk
+    globals()["RMS_GATE_REL"] = rms_gate_rel
+    globals()["RMS_GATE_ABS"] = rms_gate_abs
+    globals()["CLASSIFIER_TEMPERATURE"] = classifier_temperature
+    globals()["CONSENSUS_MIN_COUNT"] = consensus_min_count
+    globals()["CONTEXT_ALPHA"] = context_alpha
+
+    def _base_row(**kwargs) -> dict:
+        base = {
+            "filepath": str(wav),
+            "detector_threshold": f"{detector_threshold:.3f}",
+            "classifier_threshold": f"{classifier_threshold:.3f}",
+            "threshold_on": threshold_on,
+            "platt_top1_prob": "N/A",
+            "location_used": "N/A",
+            "location_source": "none",
+            "lat": "N/A",
+            "lon": "N/A",
+            "rms_gate_rel": f"{rms_gate_rel:.3f}",
+            "rms_gate_abs": f"{rms_gate_abs:.6f}",
+            "pool_topk_windows": str(pool_topk),
+            "consensus_min_count": str(consensus_min_count),
+            "consensus_pooled_k": "N/A",
+            "consensus_best_count": "N/A",
+            "postprocess_mode": str(postprocess_mode),
+            "postprocess_action": "none",
+            "detector_result": "error",
+            "detector_prob": "N/A",
+            "species_result": "error",
+            "species_prob": "N/A",
+            "top1_species": "N/A",
+            "top1_prob": "N/A",
+            "top2_species": "N/A",
+            "top2_prob": "N/A",
+            "top3_species": "N/A",
+            "top3_prob": "N/A",
+            "location_status": "N/A",
+            "original_prob": "N/A",
+            "acoustic_top10": "N/A",
+        }
+        base.update(kwargs)
+        return base
+
+    location_used = location
+    location_source = "cli" if location else "none"
+    if (location_used is None) and infer_location_from_filename:
+        inferred, src = infer_location_for_file(wav)
+        if inferred:
+            location_used = inferred
+            location_source = src
+
+    lat_used = lat
+    lon_used = lon
+    if location_map is not None:
+        wav_str = str(wav)
+        wav_resolved = str(Path(wav).resolve())
+        entry = location_map.get(wav_str) or location_map.get(wav_resolved)
+        if entry is not None:
+            lat_used = entry["lat"]
+            lon_used = entry["lon"]
+
+    not_galago_prob, det_windows = predict_detector(detector, wav)
+    if not_galago_prob is None:
+        return _base_row(
+            location_used=location_used or "N/A",
+            location_source=location_source,
+            lat=f"{lat_used:.6f}" if lat_used is not None else "N/A",
+            lon=f"{lon_used:.6f}" if lon_used is not None else "N/A",
+            detector_result="error",
+        )
+
+    galago_prob = 1.0 - float(not_galago_prob)
+    if galago_prob < detector_threshold:
+        return _base_row(
+            location_used=location_used or "N/A",
+            location_source=location_source,
+            lat=f"{lat_used:.6f}" if lat_used is not None else "N/A",
+            lon=f"{lon_used:.6f}" if lon_used is not None else "N/A",
+            postprocess_action="none",
+            detector_result="not_galago",
+            detector_prob=f"{galago_prob:.3f}",
+            species_result="not_classified",
+        )
+
+    probs, nwin, logits, selected_top1_idx, pooled_k = predict_classifier(classifier, wav, class_names)
+    if probs is None:
+        return _base_row(
+            location_used=location_used or "N/A",
+            location_source=location_source,
+            lat=f"{lat_used:.6f}" if lat_used is not None else "N/A",
+            lon=f"{lon_used:.6f}" if lon_used is not None else "N/A",
+            detector_result="galago",
+            detector_prob=f"{galago_prob:.3f}",
+            consensus_pooled_k="N/A",
+        )
+
+    t3 = topk(probs, class_names, 3)
+    k_acoustic = min(10, len(class_names))
+    t10 = topk(probs, class_names, k_acoustic)
+    acoustic_top10 = " · ".join(f"{s} {float(p):.3f}" for s, p in t10)
+    predictions_list = [(species, prob) for species, prob in t3]
+
+    if location_used or (lat_used is not None and lon_used is not None) or month is not None or hour is not None:
+        reranked = rerank_predictions(
+            predictions_list,
+            location=location_used,
+            lat=lat_used,
+            lon=lon_used,
+            month=month,
+            hour=hour,
+            alpha=context_alpha,
+        )
+        best_species, best_p, meta = reranked[0]
+        top2_species, top2_p, _ = reranked[1] if len(reranked) > 1 else ("N/A", 0.0, {})
+        top3_species, top3_p, _ = reranked[2] if len(reranked) > 2 else ("N/A", 0.0, {})
+        if lat_used is not None and lon_used is not None:
+            location_status = get_location_status_point(best_species, lat=lat_used, lon=lon_used)
+        else:
+            location_status = get_location_status(best_species, location_used)
+        original_prob = meta.get("original_prob", best_p)
+    else:
+        best_species, best_p = t3[0]
+        top2_species, top2_p = t3[1] if len(t3) > 1 else ("N/A", 0.0)
+        top3_species, top3_p = t3[2] if len(t3) > 2 else ("N/A", 0.0)
+        location_status = "N/A"
+        original_prob = best_p
+
+    consensus_best_count = "N/A"
+    if isinstance(selected_top1_idx, list) and pooled_k:
+        try:
+            consensus_best_count = str(
+                sum(1 for idx in selected_top1_idx if class_names[int(idx)] == best_species)
+            )
+        except Exception:
+            consensus_best_count = "N/A"
+
+    platt_prob = None
+    if platt_coef is not None and platt_intercept is not None:
+        z = platt_coef * float(best_p) + platt_intercept
+        if z >= 0:
+            ez = math.exp(-z)
+            platt_prob = 1.0 / (1.0 + ez)
+        else:
+            ez = math.exp(z)
+            platt_prob = ez / (1.0 + ez)
+
+    threshold_score = float(best_p) if threshold_on == "raw" else float(platt_prob)
+    species_out = best_species
+
+    if best_species == "not_galago":
+        species_out = "uncertain"
+        location_status = "N/A"
+    elif consensus_min_count and consensus_min_count > 0 and consensus_best_count != "N/A":
+        if int(consensus_best_count) < int(consensus_min_count):
+            species_out = "uncertain"
+    elif threshold_score < classifier_threshold:
+        species_out = "uncertain"
+
+    postprocess_action = "none"
+    if postprocess_mode == "tanzania_rondoensis_guard":
+        location_l = (location_used or "").strip().lower()
+        wav_name = wav.name.lower()
+        is_tanzania = (
+            ("tanzania" in location_l)
+            or ("filename:pugu" in location_source.lower())
+            or ("filename:rondo" in location_source.lower())
+            or ("pugu" in wav_name)
+            or ("rondo" in wav_name)
+            or ("pande" in wav_name)
+        )
+        if is_tanzania and species_out == "Galagoides_sp_nov":
+            if (location_status == "out_of_range") and (top2_species == "Paragalago_rondoensis"):
+                species_out = "Paragalago_rondoensis"
+                postprocess_action = "spnov_to_rondoensis"
+            else:
+                species_out = "uncertain"
+                postprocess_action = "spnov_to_uncertain"
+    elif postprocess_mode == "tanzania_spnov_to_rondoensis":
+        wav_name = wav.name.lower()
+        location_l = (location_used or "").strip().lower()
+        is_tanzania = (
+            ("tanzania" in location_l)
+            or ("filename:pugu" in location_source.lower())
+            or ("filename:rondo" in location_source.lower())
+            or ("pugu" in wav_name)
+            or ("rondo" in wav_name)
+            or ("pande" in wav_name)
+        )
+        if is_tanzania and species_out == "Galagoides_sp_nov":
+            species_out = "Paragalago_rondoensis"
+            postprocess_action = "spnov_to_rondoensis_aggressive"
+
+    return {
+        "filepath": str(wav),
+        "detector_threshold": f"{detector_threshold:.3f}",
+        "classifier_threshold": f"{classifier_threshold:.3f}",
+        "threshold_on": threshold_on,
+        "platt_top1_prob": f"{platt_prob:.3f}" if platt_prob is not None else "N/A",
+        "location_used": location_used or "N/A",
+        "location_source": location_source,
+        "lat": f"{lat_used:.6f}" if lat_used is not None else "N/A",
+        "lon": f"{lon_used:.6f}" if lon_used is not None else "N/A",
+        "rms_gate_rel": f"{rms_gate_rel:.3f}",
+        "rms_gate_abs": f"{rms_gate_abs:.6f}",
+        "pool_topk_windows": str(pool_topk),
+        "consensus_min_count": str(consensus_min_count),
+        "consensus_pooled_k": str(pooled_k) if pooled_k is not None else "N/A",
+        "consensus_best_count": consensus_best_count,
+        "postprocess_mode": str(postprocess_mode),
+        "postprocess_action": postprocess_action,
+        "detector_result": "galago",
+        "detector_prob": f"{galago_prob:.3f}",
+        "species_result": species_out,
+        "species_prob": f"{best_p:.3f}",
+        "top1_species": best_species,
+        "top1_prob": f"{best_p:.3f}",
+        "top2_species": top2_species,
+        "top2_prob": f"{top2_p:.3f}" if isinstance(top2_p, float) else str(top2_p),
+        "top3_species": top3_species,
+        "top3_prob": f"{top3_p:.3f}" if isinstance(top3_p, float) else str(top3_p),
+        "location_status": location_status,
+        "original_prob": f"{original_prob:.3f}",
+        "acoustic_top10": acoustic_top10,
+    }
+
 
 # ---------------- MAIN ----------------
 def main():
@@ -283,7 +589,11 @@ def main():
     #   --threshold-on <raw|platt>   (default: raw; 'platt' requires --platt-json)
     #   --infer-location-from-filename   (optional: infer location string from filename tokens)
     #   --lat <float> --lon <float>  (optional: use polygon-based location priors)
+    #   --wav <path>                 (optional: single WAV file; skips filelist / scanning data/raw_audio)
     #   --location-map-json <path>   (optional: per-file lat/lon; keys = filepath, values = {lat, lon})
+    #   --consensus-min-count <int>  (optional: require best class in >=N pooled windows; 0 disables)
+    #   --profiles-json <path>       (optional: JSON with named parameter profiles)
+    #   --profile <name>             (optional: apply a profile; explicit flags override)
     location = None
     month = None
     hour = None
@@ -291,6 +601,7 @@ def main():
     lon = None
     location_map_json_path = None
     filelist_path = None
+    wav_single_path = None
     out_csv_path = None
     classifier_model_path_override = None
     detector_threshold = DETECTOR_THRESHOLD
@@ -302,17 +613,86 @@ def main():
     threshold_on = "raw"
     infer_location_from_filename = False
     classifier_temperature = CLASSIFIER_TEMPERATURE
+    consensus_min_count = CONSENSUS_MIN_COUNT
+    postprocess_mode = "none"
+    profiles_json_path = str(DEFAULT_PROFILES_JSON) if DEFAULT_PROFILES_JSON.exists() else None
+    profile_name = None
 
     args = sys.argv[1:]
     i = 0
     positionals = []
+
+    def apply_profile(name: str) -> None:
+        nonlocal classifier_threshold, detector_threshold, pool_topk, rms_gate_rel, rms_gate_abs
+        nonlocal consensus_min_count, classifier_temperature, postprocess_mode
+        nonlocal classifier_model_path_override
+        try:
+            if not profiles_json_path:
+                print("\nERROR: --profile used but no profiles JSON is available")
+                raise SystemExit(2)
+            pth = Path(profiles_json_path)
+            if not pth.exists():
+                print(f"\nERROR: Profiles JSON not found: {pth}")
+                raise SystemExit(2)
+            data = json.loads(pth.read_text(encoding="utf-8"))
+            prof = data.get(name)
+            if not isinstance(prof, dict):
+                print(f"\nERROR: Unknown profile: {name}")
+                print(f"Available: {', '.join(sorted(data.keys()))}")
+                raise SystemExit(2)
+            classifier_threshold = float(prof.get("classifier_threshold", classifier_threshold))
+            detector_threshold = float(prof.get("detector_threshold", detector_threshold))
+            pool_topk = int(prof.get("pool_topk_windows", pool_topk))
+            rms_gate_rel = float(prof.get("rms_gate_rel", rms_gate_rel))
+            rms_gate_abs = float(prof.get("rms_gate_abs", rms_gate_abs))
+            consensus_min_count = int(prof.get("consensus_min_count", consensus_min_count))
+            classifier_temperature = float(prof.get("temperature", classifier_temperature))
+            postprocess_mode = str(prof.get("postprocess_mode", postprocess_mode))
+            # Context alpha is global; set it if present
+            if "context_alpha" in prof:
+                globals()["CONTEXT_ALPHA"] = float(prof["context_alpha"])
+            # Optional profile-level classifier model override (only if not set via --classifier-model)
+            if "classifier_model" in prof and classifier_model_path_override is None:
+                model_val = prof["classifier_model"]
+                # Support relative paths (relative to PROJECT_ROOT)
+                m_path = Path(model_val)
+                if not m_path.is_absolute():
+                    m_path = PROJECT_ROOT / m_path
+                classifier_model_path_override = str(m_path)
+        except SystemExit:
+            raise
+        except Exception as e:
+            print(f"\nERROR: Failed to apply profile '{name}': {e}")
+            raise SystemExit(2)
     while i < len(args):
         a = args[i]
+        if a == "--profiles-json":
+            if i + 1 >= len(args):
+                print("\nERROR: --profiles-json requires a path")
+                return
+            profiles_json_path = args[i + 1]
+            i += 2
+            continue
+        if a == "--profile":
+            if i + 1 >= len(args):
+                print("\nERROR: --profile requires a name")
+                return
+            profile_name = args[i + 1]
+            apply_profile(profile_name)
+            i += 2
+            continue
         if a == "--filelist":
             if i + 1 >= len(args):
                 print("\nERROR: --filelist requires a path")
                 return
             filelist_path = args[i + 1]
+            i += 2
+            continue
+        if a == "--wav":
+            if i + 1 >= len(args):
+                print("\nERROR: --wav requires a path")
+                return
+            wav_single_path = args[i + 1]
             i += 2
             continue
         if a == "--out-csv":
@@ -410,6 +790,20 @@ def main():
             classifier_temperature = float(args[i + 1])
             i += 2
             continue
+        if a == "--consensus-min-count":
+            if i + 1 >= len(args):
+                print("\nERROR: --consensus-min-count requires an int")
+                return
+            consensus_min_count = int(args[i + 1])
+            i += 2
+            continue
+        if a == "--postprocess-mode":
+            if i + 1 >= len(args):
+                print("\nERROR: --postprocess-mode requires a value")
+                return
+            postprocess_mode = str(args[i + 1]).strip().lower()
+            i += 2
+            continue
         positionals.append(a)
         i += 1
 
@@ -419,6 +813,7 @@ def main():
     globals()["RMS_GATE_REL"] = rms_gate_rel
     globals()["RMS_GATE_ABS"] = rms_gate_abs
     globals()["CLASSIFIER_TEMPERATURE"] = classifier_temperature
+    globals()["CONSENSUS_MIN_COUNT"] = consensus_min_count
 
     # Optional Platt scaling (calibrate top1_prob -> P(correct)).
     platt_coef = None
@@ -470,21 +865,6 @@ def main():
 
     out_csv = Path(out_csv_path) if out_csv_path else OUT_CSV
 
-    def infer_location_for_file(wav_path: Path) -> tuple[str | None, str]:
-        """
-        Best-effort location inference for this repo.
-
-        IMPORTANT: To avoid label leakage on this dataset, we only use *place tokens*
-        that appear in filenames (e.g. 'Pugu', 'Rondo'), and we do NOT infer location
-        from species-name substrings.
-        """
-        s = wav_path.name
-        if re.search(r"\bPugu\b", s, flags=re.IGNORECASE):
-            return "Tanzania", "filename:Pugu"
-        if re.search(r"\bRondo\b", s, flags=re.IGNORECASE):
-            return "Tanzania", "filename:Rondo"
-        return None, "none"
-    
     # Check models
     if not DETECTOR_PATH.exists():
         print(f"\nERROR: Detector model not found: {DETECTOR_PATH}")
@@ -500,20 +880,8 @@ def main():
     detector = tf.keras.models.load_model(DETECTOR_PATH)
     classifier = tf.keras.models.load_model(classifier_path)
 
-    # Pick class-name file based on classifier output size (avoid mismatches that look like nonsense/uniform).
-    n_out = int(classifier.output_shape[1])
-    if n_out == 16 and CLASS_NAMES_PATH_16.exists():
-        names_path = CLASS_NAMES_PATH_16
-    elif n_out == 17 and CLASS_NAMES_PATH_17.exists():
-        names_path = CLASS_NAMES_PATH_17
-    elif n_out == 19 and CLASS_NAMES_PATH_19.exists():
-        names_path = CLASS_NAMES_PATH_19
-    else:
-        names_path = CLASS_NAMES_PATH_FALLBACK
+    CLASS_NAMES, names_path = resolve_class_names_for_classifier(classifier)
 
-    with open(names_path, "r") as f:
-        CLASS_NAMES = json.load(f)
-    
     print(f"  Detector: {DETECTOR_PATH.name}")
     print(f"  Classifier: {classifier_path.name}")
     print(f"  Classes: {len(CLASS_NAMES)} species")
@@ -525,12 +893,16 @@ def main():
     print(f"  RMS_GATE_REL: {RMS_GATE_REL}")
     print(f"  RMS_GATE_ABS: {RMS_GATE_ABS}")
     print(f"  POOL_TOPK_WINDOWS: {POOL_TOPK_WINDOWS}")
+    print(f"  Consensus min-count: {CONSENSUS_MIN_COUNT}")
+    if profile_name:
+        print(f"\nProfile: {profile_name}")
     if platt_coef is not None and platt_intercept is not None:
         print(f"\nConfidence calibration:")
         print(f"  Platt: coef={platt_coef:.3f} intercept={platt_intercept:.3f}")
         print(f"  Thresholding on: {threshold_on}")
     print(f"  Classifier temperature: {classifier_temperature}")
     print(f"  Context alpha: {CONTEXT_ALPHA}")
+    print(f"  Postprocess mode: {postprocess_mode}")
     if infer_location_from_filename:
         print("\nLocation inference: enabled (filename tokens)")
     if lat is not None and lon is not None:
@@ -551,7 +923,16 @@ def main():
         print(f"\nContext: None (no re-ranking)")
     
     # Find audio files
-    if filelist_path:
+    if wav_single_path:
+        wone = Path(wav_single_path)
+        if not wone.exists():
+            print(f"\nERROR: WAV not found: {wone}")
+            return
+        if wone.suffix.lower() != ".wav":
+            print(f"\nERROR: --wav must point to a .wav file: {wone}")
+            return
+        wav_files = [wone.resolve()]
+    elif filelist_path:
         filelist = Path(filelist_path)
         if not filelist.exists():
             print(f"\nERROR: Filelist not found: {filelist}")
@@ -580,205 +961,47 @@ def main():
     
     for i, wav in enumerate(wav_files, 1):
         print(f"[{i}/{len(wav_files)}] {wav.name}...", end=" ", flush=True)
-
-        # If user didn't provide a location, optionally infer it from filename.
-        location_used = location
-        location_source = "cli" if location else "none"
-        if (location_used is None) and infer_location_from_filename:
-            inferred, src = infer_location_for_file(wav)
-            if inferred:
-                location_used = inferred
-                location_source = src
-
-        # Lat/lon for polygon priors: per-file from map, else global
-        lat_used = lat
-        lon_used = lon
-        if location_map is not None:
-            wav_str = str(wav)
-            wav_resolved = str(Path(wav).resolve())
-            entry = location_map.get(wav_str) or location_map.get(wav_resolved)
-            if entry is not None:
-                lat_used = entry["lat"]
-                lon_used = entry["lon"]
-        
-        # Stage 1: Detector
-        # predict_detector() returns P(not_galago) (sigmoid output for label 1).
-        not_galago_prob, det_windows = predict_detector(detector, wav)
-        
-        if not_galago_prob is None:
+        row = run_single_wav(
+            wav,
+            detector=detector,
+            classifier=classifier,
+            class_names=CLASS_NAMES,
+            location=location,
+            month=month,
+            hour=hour,
+            lat=lat,
+            lon=lon,
+            location_map=location_map,
+            infer_location_from_filename=infer_location_from_filename,
+            detector_threshold=detector_threshold,
+            classifier_threshold=classifier_threshold,
+            pool_topk=pool_topk,
+            rms_gate_rel=rms_gate_rel,
+            rms_gate_abs=rms_gate_abs,
+            classifier_temperature=classifier_temperature,
+            consensus_min_count=consensus_min_count,
+            context_alpha=float(CONTEXT_ALPHA),
+            threshold_on=threshold_on,
+            platt_coef=platt_coef,
+            platt_intercept=platt_intercept,
+            postprocess_mode=postprocess_mode,
+        )
+        results.append(row)
+        dr = row["detector_result"]
+        if dr == "error":
             detector_stats["error"] += 1
-            results.append({
-                "filepath": str(wav),
-                "detector_threshold": f"{detector_threshold:.3f}",
-                "classifier_threshold": f"{classifier_threshold:.3f}",
-                "threshold_on": threshold_on,
-                "platt_top1_prob": "N/A",
-                "location_used": location_used or "N/A",
-                "location_source": location_source,
-                "lat": f"{lat_used:.6f}" if lat_used is not None else "N/A",
-                "lon": f"{lon_used:.6f}" if lon_used is not None else "N/A",
-                "rms_gate_rel": f"{RMS_GATE_REL:.3f}",
-                "rms_gate_abs": f"{RMS_GATE_ABS:.6f}",
-                "pool_topk_windows": str(POOL_TOPK_WINDOWS),
-                "detector_result": "error",
-                "detector_prob": "N/A",
-                "species_result": "error",
-                "species_prob": "N/A",
-                "top1_species": "N/A",
-                "top1_prob": "N/A",
-                "top2_species": "N/A", "top2_prob": "N/A",
-                "top3_species": "N/A", "top3_prob": "N/A",
-                "location_status": "N/A",
-                "original_prob": "N/A",
-            })
             print("ERROR")
-            continue
-        
-        galago_prob = 1.0 - float(not_galago_prob)
-        
-        if galago_prob < detector_threshold:
+        elif dr == "not_galago":
             detector_stats["not_galago"] += 1
-            results.append({
-                "filepath": str(wav),
-                "detector_threshold": f"{detector_threshold:.3f}",
-                "classifier_threshold": f"{classifier_threshold:.3f}",
-                "threshold_on": threshold_on,
-                "platt_top1_prob": "N/A",
-                "location_used": location_used or "N/A",
-                "location_source": location_source,
-                "lat": f"{lat_used:.6f}" if lat_used is not None else "N/A",
-                "lon": f"{lon_used:.6f}" if lon_used is not None else "N/A",
-                "rms_gate_rel": f"{RMS_GATE_REL:.3f}",
-                "rms_gate_abs": f"{RMS_GATE_ABS:.6f}",
-                "pool_topk_windows": str(POOL_TOPK_WINDOWS),
-                "detector_result": "not_galago",
-                "detector_prob": f"{galago_prob:.3f}",
-                "species_result": "not_classified",
-                "species_prob": "N/A",
-                "top1_species": "N/A",
-                "top1_prob": "N/A",
-                "top2_species": "N/A", "top2_prob": "N/A",
-                "top3_species": "N/A", "top3_prob": "N/A",
-                "location_status": "N/A",
-                "original_prob": "N/A",
-            })
-            print(f"NOT GALAGO ({galago_prob:.3f})")
-            continue
-        
-        # Stage 2: Classifier
-        detector_stats["galago"] += 1
-        probs, nwin, logits = predict_classifier(classifier, wav, CLASS_NAMES)
-        
-        if probs is None:
-            results.append({
-                "filepath": str(wav),
-                "detector_threshold": f"{detector_threshold:.3f}",
-                "classifier_threshold": f"{classifier_threshold:.3f}",
-                "threshold_on": threshold_on,
-                "platt_top1_prob": "N/A",
-                "location_used": location_used or "N/A",
-                "location_source": location_source,
-                "lat": f"{lat_used:.6f}" if lat_used is not None else "N/A",
-                "lon": f"{lon_used:.6f}" if lon_used is not None else "N/A",
-                "rms_gate_rel": f"{RMS_GATE_REL:.3f}",
-                "rms_gate_abs": f"{RMS_GATE_ABS:.6f}",
-                "pool_topk_windows": str(POOL_TOPK_WINDOWS),
-                "detector_result": "galago",
-                "detector_prob": f"{galago_prob:.3f}",
-                "species_result": "error",
-                "species_prob": "N/A",
-                "top1_species": "N/A",
-                "top1_prob": "N/A",
-                "top2_species": "N/A", "top2_prob": "N/A",
-                "top3_species": "N/A", "top3_prob": "N/A",
-                "location_status": "N/A",
-                "original_prob": "N/A",
-            })
-            print("ERROR")
-            continue
-        
-        t3 = topk(probs, CLASS_NAMES, 3)
-        predictions_list = [(species, prob) for species, prob in t3]
-        
-        # Stage 3: Context Re-ranking
-        if location_used or (lat_used is not None and lon_used is not None) or month is not None or hour is not None:
-            reranked = rerank_predictions(
-                predictions_list,
-                location=location_used,
-                lat=lat_used,
-                lon=lon_used,
-                month=month,
-                hour=hour,
-                alpha=CONTEXT_ALPHA
-            )
-            best_species, best_p, meta = reranked[0]
-            top2_species, top2_p, _ = reranked[1] if len(reranked) > 1 else ("N/A", 0.0, {})
-            top3_species, top3_p, _ = reranked[2] if len(reranked) > 2 else ("N/A", 0.0, {})
-            if lat_used is not None and lon_used is not None:
-                location_status = get_location_status_point(best_species, lat=lat_used, lon=lon_used)
-            else:
-                location_status = get_location_status(best_species, location_used)
-            original_prob = meta.get('original_prob', best_p)
+            print(f"NOT GALAGO ({row['detector_prob']})")
         else:
-            best_species, best_p = t3[0]
-            top2_species, top2_p = t3[1] if len(t3) > 1 else ("N/A", 0.0)
-            top3_species, top3_p = t3[2] if len(t3) > 2 else ("N/A", 0.0)
-            location_status = "N/A"
-            original_prob = best_p
-        
-        # Optional Platt scaling for top-1 confidence (map raw prob -> estimated P(correct))
-        platt_prob = None
-        if platt_coef is not None and platt_intercept is not None:
-            z = platt_coef * float(best_p) + platt_intercept
-            # stable sigmoid
-            if z >= 0:
-                ez = math.exp(-z)
-                platt_prob = 1.0 / (1.0 + ez)
+            detector_stats["galago"] += 1
+            if row["species_result"] == "error":
+                print("ERROR")
             else:
-                ez = math.exp(z)
-                platt_prob = ez / (1.0 + ez)
-
-        threshold_score = float(best_p) if threshold_on == "raw" else float(platt_prob)
-
-        # Special-case: classifier may include a background class
-        if best_species == "not_galago":
-            species_out = "uncertain"
-            location_status = "N/A"
-        elif threshold_score < classifier_threshold:
-            species_out = "uncertain"
-        else:
-            species_out = best_species
-        
-        # Always store the model's raw top-1 species even if we output "uncertain"
-        results.append({
-            "filepath": str(wav),
-            "detector_threshold": f"{detector_threshold:.3f}",
-            "classifier_threshold": f"{classifier_threshold:.3f}",
-            "threshold_on": threshold_on,
-            "platt_top1_prob": f"{platt_prob:.3f}" if platt_prob is not None else "N/A",
-            "location_used": location_used or "N/A",
-            "location_source": location_source,
-            "lat": f"{lat_used:.6f}" if lat_used is not None else "N/A",
-            "lon": f"{lon_used:.6f}" if lon_used is not None else "N/A",
-            "rms_gate_rel": f"{RMS_GATE_REL:.3f}",
-            "rms_gate_abs": f"{RMS_GATE_ABS:.6f}",
-            "pool_topk_windows": str(POOL_TOPK_WINDOWS),
-            "detector_result": "galago",
-            "detector_prob": f"{galago_prob:.3f}",
-            "species_result": species_out,
-            "species_prob": f"{best_p:.3f}",
-            "top1_species": best_species,
-            "top1_prob": f"{best_p:.3f}",
-            "top2_species": top2_species,
-            "top2_prob": f"{top2_p:.3f}" if isinstance(top2_p, float) else str(top2_p),
-            "top3_species": top3_species,
-            "top3_prob": f"{top3_p:.3f}" if isinstance(top3_p, float) else str(top3_p),
-            "location_status": location_status,
-            "original_prob": f"{original_prob:.3f}",
-        })
-        
-        status_marker = f" [{location_status}]" if location_status != "N/A" else ""
-        print(f"GALAGO -> {species_out} ({best_p:.3f}){status_marker}")
+                loc = row["location_status"]
+                sm = f" [{loc}]" if loc != "N/A" else ""
+                print(f"GALAGO -> {row['species_result']} ({row['species_prob']}){sm}")
     
     # Save results
     out_csv.parent.mkdir(parents=True, exist_ok=True)

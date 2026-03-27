@@ -1,0 +1,15 @@
+[
+  {"id": "", "label": "(Ange manuellt eller ingen plats)", "lat": null, "lon": null},
+  {"id": "malawi_mkwazi", "label": "Malawi — Mkwazi (G.sp.nov.1 fält)", "lat": -13.9626, "lon": 33.7741},
+  {"id": "malawi_trff_granti", "label": "Malawi — TRFF / G.granti_malawi (ca)", "lat": -16.1, "lon": 35.13},
+  {"id": "malawi_mughese", "label": "Malawi — Mughese (G.sp.nov.3)", "lat": -9.85, "lon": 33.7},
+  {"id": "tz_pugu", "label": "Tanzania — Pugu (ca)", "lat": -6.8, "lon": 39.28},
+  {"id": "tz_rondo", "label": "Tanzania — Rondo (ca)", "lat": -10.2, "lon": 39.85},
+  {"id": "tz_pande", "label": "Tanzania — Pande / Udzungwa (ca)", "lat": -8.5, "lon": 35.5},
+  {"id": "kenya_central", "label": "Kenya — central (ca, referens)", "lat": -0.4, "lon": 37.0},
+  {"id": "drc_equator", "label": "DR Kongo — ekvatorn (ca, demidovii m.m.)", "lat": -1.0, "lon": 23.0},
+  {"id": "gabon", "label": "Gabon (ca, väst centralafrika)", "lat": -0.7, "lon": 11.8},
+  {"id": "cameroon", "label": "Kamerun (ca)", "lat": 4.0, "lon": 12.0},
+  {"id": "south_africa", "label": "Sydafrika — moholi m.m. (ca)", "lat": -25.7, "lon": 28.2},
+  {"id": "zanzibar", "label": "Zanzibar / kust TZ (ca)", "lat": -6.2, "lon": 39.2}
+]

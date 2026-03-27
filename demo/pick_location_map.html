@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <title>Välj plats (decimalgrader)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 12px; }
+    #map { height: 420px; border: 1px solid #ccc; border-radius: 8px; }
+    #out { margin-top: 10px; padding: 10px; background: #f4f4f4; border-radius: 6px; font-family: ui-monospace, monospace; }
+    p.hint { color: #444; max-width: 52rem; }
+  </style>
+</head>
+<body>
+  <h2>Karta — klicka för koordinater</h2>
+  <p class="hint">
+    <strong>Format:</strong> resultatet är <em>decimalgrader</em> (WGS84), samma som i demot — inte grader/minuter/sekunder.
+    Exempel: lat <code>-13.9626</code>, lon <code>33.7741</code>.
+    Kopiera värdena in i fälten <strong>Latitude</strong> och <strong>Longitude</strong> i Gradio-demot.
+  </p>
+  <div id="map"></div>
+  <div id="out">Klicka på kartan…</div>
+  <p style="margin-top:8px;">
+    <button type="button" id="copyBtn" disabled>Kopiera lat och lon (till urklipp)</button>
+    <span id="copyMsg" style="margin-left:8px;font-size:0.9rem;color:#063;"></span>
+  </p>
+  <script>
+    var lastLa = null, lastLo = null;
+    var map = L.map('map').setView([-5, 25], 4);
+    // OSM:s egen tile-server returnerar ofta 403 i inbäddade sidor (iframe / data-URL). Carto CDN är mer tillåtande.
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png', {
+      maxZoom: 20,
+      subdomains: 'abcd',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+    }).addTo(map);
+    map.on('click', function (e) {
+      lastLa = e.latlng.lat.toFixed(6);
+      lastLo = e.latlng.lng.toFixed(6);
+      document.getElementById('out').innerHTML =
+        '<strong>Latitude:</strong> ' + lastLa + '<br><strong>Longitude:</strong> ' + lastLo +
+        '<br><small>Klistra raden i demots ruta <strong>Klistra koordinater</strong> och klicka <strong>Tillämpa</strong>, eller skriv in Latitude / Longitude manuellt.</small>';
+      document.getElementById('copyBtn').disabled = false;
+      document.getElementById('copyMsg').textContent = '';
+    });
+    document.getElementById('copyBtn').onclick = function () {
+      if (lastLa === null) return;
+      var line = lastLa + '\t' + lastLo;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(line).then(function () {
+          document.getElementById('copyMsg').textContent = 'Kopierat! Klistra i demot → Tillämpa.';
+        }).catch(function () {
+          document.getElementById('copyMsg').textContent = 'Kunde inte kopiera — markera siffrorna manuellt.';
+        });
+      } else {
+        document.getElementById('copyMsg').textContent = 'Ingen clipboard-API — kopiera från rutan ovan.';
+      }
+    };
+  </script>
+</body>
+</html>
