@@ -50,6 +50,23 @@ def _load_dotenv_if_present() -> None:
 
 _load_dotenv_if_present()
 
+# Compatibility shim: gradio 4.44.0 imports HfFolder which was removed in
+# huggingface_hub 0.26+. HF Spaces pre-installs huggingface_hub>=0.30, so we
+# stub it back before gradio is imported inside main().
+try:
+    from huggingface_hub import HfFolder as _HfFolder  # noqa: F401
+except ImportError:
+    import huggingface_hub as _hfhub
+
+    class _HfFolderStub:
+        @staticmethod
+        def get_token() -> "str | None":
+            import os
+            return os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+
+    _hfhub.HfFolder = _HfFolderStub  # type: ignore[attr-defined]
+    del _hfhub
+
 try:
     from ensure_hf_hub_models import ensure_hf_hub_models
 
