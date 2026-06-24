@@ -729,7 +729,7 @@ def main() -> None:
     for port in range(base, base + 10):
         try:
             demo.launch(
-                server_name="127.0.0.1",
+                server_name="0.0.0.0",
                 server_port=port,
                 allowed_paths=[demo_dir],
             )

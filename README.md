@@ -4,7 +4,7 @@ emoji: 🦔
 colorFrom: green
 colorTo: blue
 sdk: gradio
-sdk_version: "4.44.1"
+sdk_version: "4.45.0"
 app_file: demo/upload_predict_gradio.py
 pinned: false
 license: mit
