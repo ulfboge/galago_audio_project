@@ -78,6 +78,22 @@ from cached_predictor import get_cached_predictor
 from demo_observer_feedback import append_observer_feedback
 from demo_prediction_log import append_prediction_log
 
+# Gradio 4.44.x has a bug where gradio_client passes additionalProperties=True
+# (a bool) into _json_schema_to_python_type, which then does `"const" in True`
+# and raises TypeError. Patch it to return "Any" for non-dict schemas.
+try:
+    import gradio_client.utils as _gc_utils
+    _orig_j2p = _gc_utils._json_schema_to_python_type
+
+    def _patched_j2p(schema, defs=None):
+        if not isinstance(schema, dict):
+            return "Any"
+        return _orig_j2p(schema, defs)
+
+    _gc_utils._json_schema_to_python_type = _patched_j2p
+except Exception:
+    pass
+
 # ── Säkerhetsgränser ────────────────────────────────────────────────────────
 # Max filstorlek för uppladdad WAV (bytes). Standard 50 MB.
 MAX_WAV_BYTES: int = int(os.environ.get("DEMO_MAX_WAV_MB", "50")) * 1024 * 1024
