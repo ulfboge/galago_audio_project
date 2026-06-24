@@ -1,6 +1,9 @@
 # Hugging Face Spaces (and full local demo): pip install -r requirements.txt
 # Lighter local UI only: pip install -r requirements-demo.txt
 gradio>=4.44.1,<5
+# Gradio 4.44.x calls TemplateResponse(name, context); Starlette 1.0 removed that
+# signature → Jinja2 TypeError: unhashable type: 'dict' on every page load.
+starlette>=0.37.2,<1.0.0
 huggingface_hub>=0.23.0
 librosa>=0.10.0
 matplotlib>=3.8.0

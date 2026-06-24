@@ -1,0 +1,90 @@
+{
+  "species_ranges": {
+    "Euoticus_elegantulus": {
+      "countries": ["Cameroon", "Equatorial Guinea", "Gabon", "Republic of the Congo"],
+      "regions": ["West-Central Africa"],
+      "notes": "Needle-clawed bushbaby"
+    },
+    "Euoticus_pallidus": {
+      "countries": ["Cameroon", "Equatorial Guinea", "Gabon", "Republic of the Congo"],
+      "regions": ["West-Central Africa"],
+      "notes": "Northern needle-clawed bushbaby"
+    },
+    "Galago_gallarum": {
+      "countries": ["Ethiopia", "Kenya", "Somalia"],
+      "regions": ["East Africa", "Horn of Africa"],
+      "notes": "Somali galago"
+    },
+    "Galago_matschiei": {
+      "countries": ["Democratic Republic of the Congo", "Uganda"],
+      "regions": ["Central Africa"],
+      "notes": "Matschie's galago"
+    },
+    "Galago_moholi": {
+      "countries": ["Angola", "Botswana", "Mozambique", "Namibia", "South Africa", "Zimbabwe"],
+      "regions": ["Southern Africa"],
+      "notes": "Southern lesser galago"
+    },
+    "Galago_senegalensis": {
+      "countries": ["Burkina Faso", "Cameroon", "Chad", "Ethiopia", "Gambia", "Ghana", "Guinea", "Guinea-Bissau", "Ivory Coast", "Kenya", "Mali", "Mauritania", "Niger", "Nigeria", "Senegal", "Sierra Leone", "Sudan", "Tanzania", "Uganda"],
+      "regions": ["West Africa", "East Africa", "Sahel"],
+      "notes": "Senegal bushbaby - widespread"
+    },
+    "Galagoides_demidovii": {
+      "countries": ["Cameroon", "Central African Republic", "Democratic Republic of the Congo", "Equatorial Guinea", "Gabon", "Republic of the Congo"],
+      "regions": ["Central Africa", "West-Central Africa"],
+      "notes": "Demidoff's dwarf galago"
+    },
+    "Galagoides_sp_nov": {
+      "countries": ["Tanzania", "Malawi", "Mozambique"],
+      "regions": ["East Africa"],
+      "notes": "New species - distribution being determined"
+    },
+    "Galagoides_thomasi": {
+      "countries": ["Angola", "Cameroon", "Central African Republic", "Democratic Republic of the Congo", "Equatorial Guinea", "Gabon", "Republic of the Congo"],
+      "regions": ["Central Africa", "West-Central Africa"],
+      "notes": "Thomas's dwarf galago"
+    },
+    "Otolemur_crassicaudatus": {
+      "countries": ["Angola", "Botswana", "Malawi", "Mozambique", "Namibia", "South Africa", "Swaziland", "Tanzania", "Zambia", "Zimbabwe"],
+      "regions": ["Southern Africa", "East Africa"],
+      "notes": "Greater galago, thick-tailed bushbaby"
+    },
+    "Otolemur_garnettii": {
+      "countries": ["Kenya", "Tanzania"],
+      "regions": ["East Africa"],
+      "notes": "Northern greater galago, Garnett's greater galago"
+    },
+    "Paragalago_cocos": {
+      "countries": ["Kenya", "Tanzania"],
+      "regions": ["East Africa", "Coastal"],
+      "notes": "Diani dwarf galago"
+    },
+    "Paragalago_granti": {
+      "countries": ["Malawi", "Mozambique", "Tanzania", "Zimbabwe"],
+      "regions": ["East Africa", "Southern Africa"],
+      "notes": "Grant's dwarf galago (formerly Galago granti)"
+    },
+    "Paragalago_orinus": {
+      "countries": ["Tanzania"],
+      "regions": ["East Africa", "Eastern Arc Mountains"],
+      "notes": "Mountain dwarf galago"
+    },
+    "Paragalago_rondoensis": {
+      "countries": ["Tanzania"],
+      "regions": ["East Africa", "Coastal"],
+      "notes": "Rondo dwarf galago - very restricted range"
+    },
+    "Paragalago_zanzibaricus": {
+      "countries": ["Tanzania"],
+      "regions": ["East Africa", "Zanzibar", "Coastal"],
+      "notes": "Zanzibar dwarf galago"
+    }
+  },
+  "metadata": {
+    "source": "IUCN Red List, literature review",
+    "last_updated": "2025-12-17",
+    "notes": "Geographic ranges are approximate. Some species have very restricted ranges (e.g., Paragalago_rondoensis), while others are widespread (e.g., Galago_senegalensis)."
+  }
+}
+

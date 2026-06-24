@@ -12,8 +12,15 @@ __pycache__/
 # Local environment / editor
 .venv/
 .cursor/
+.env
 
 # Raw audio and derived training data (large)
 audio_clips/
-data/
+data/**
+!data/species_ranges.json
+
+# Gradio demo append-only log (delete this line if you want to commit test runs)
+demo/logs/predictions.jsonl
+demo/logs/observer_feedback.jsonl
+demo/logs/wav_archive/
 
