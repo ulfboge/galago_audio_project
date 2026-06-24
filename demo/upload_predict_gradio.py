@@ -308,7 +308,7 @@ def run_predict(
     log_this: bool,
     tanzania_no_spnov_remap: bool,
     presets: list[dict],
-) -> tuple[str, str, dict | None, str, dict | None]:
+):
     """
     Returns (markdown, debug_log, session_entry_or_none, acoustic_top10_markdown, feedback_snapshot_or_none).
     feedback_snapshot binds the next observer feedback row to this predict().
