@@ -732,6 +732,7 @@ def main() -> None:
                 server_name="0.0.0.0",
                 server_port=port,
                 allowed_paths=[demo_dir],
+                show_api=False,
             )
             break
         except OSError as e:
