@@ -1,7 +1,6 @@
-/* Galago demo map — loaded via /file= from Gradio allowed_paths (Gradio 4.44 strips inline <script>). */
+/* Galago demo map — loaded after Leaflet via galago_map_boot (see upload_predict_gradio.py). */
 (function () {
   if (window.__galagoMapBooted) return;
-  window.__galagoMapBooted = true;
 
   function setGradioField(elemId, value) {
     var root = document.getElementById(elemId);
@@ -22,6 +21,7 @@
   }
 
   function initMap() {
+    window.__galagoMapBooted = true;
     var out = document.getElementById("galago-coord-out");
     if (typeof L === "undefined") {
       if (out) {
@@ -85,9 +85,15 @@
     window.addEventListener("resize", fixSize);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initMap);
-  } else {
-    initMap();
+  function waitForMap(attempts) {
+    if (document.getElementById("galago-map")) {
+      initMap();
+      return;
+    }
+    if (attempts > 0) {
+      setTimeout(function () { waitForMap(attempts - 1); }, 250);
+    }
   }
+
+  waitForMap(80);
 })();

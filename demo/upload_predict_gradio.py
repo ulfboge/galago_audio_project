@@ -157,44 +157,65 @@ def _load_site_presets() -> list[dict]:
 
 
 def _gradio_file_url(path: Path) -> str:
-    """Gradio 4.x /file= route for assets under allowed_paths."""
+    """Gradio /file= route for assets under allowed_paths (absolute path)."""
     return "/file=" + str(path.resolve()).replace("\\", "/")
 
 
-def _map_embed_html(demo_dir: Path) -> str:
-    """
-    Leaflet via local vendor files + external galago_map.js (no inline <script>).
-
-    Gradio 4.44 on HF Spaces strips inline scripts in gr.HTML; external /file= scripts work.
-    """
-    leaflet_css = demo_dir / "vendor" / "leaflet" / "leaflet.css"
-    leaflet_js = demo_dir / "vendor" / "leaflet" / "leaflet.js"
-    map_js = demo_dir / "galago_map.js"
-    if not leaflet_js.is_file() or not map_js.is_file():
-        return (
-            "<p><em>Kartfiler saknas under <code>demo/vendor/leaflet/</code>. "
-            "Välj <strong>Förvald plats</strong> eller fyll i lat/long manuellt.</em></p>"
-        )
-    css_url = _gradio_file_url(leaflet_css)
-    js_leaflet = _gradio_file_url(leaflet_js)
-    js_map = _gradio_file_url(map_js)
+def _map_shell_html() -> str:
+    """Map markup only — no script/link (Gradio strips those inside gr.HTML)."""
     return (
         "<p><strong>Karta</strong> — klicka för lat/lon (WGS84, decimalgrader). "
         "Klick uppdaterar fälten <em>Latitude</em>, <em>Longitude</em> och "
         "<em>Klistra koordinater</em> nedan.</p>"
-        '<link rel="stylesheet" href="' + css_url + '" />'
         "<div id=\"galago-map-wrap\">"
-        '<div id="galago-map" style="height:400px;border:1px solid #ccc;border-radius:8px;max-width:100%"></div>'
+        '<div id="galago-map" style="height:400px;border:1px solid #ccc;border-radius:8px;max-width:100%;min-height:400px;background:#e8e8e8"></div>'
         '<div id="galago-coord-out" style="margin-top:10px;padding:10px;background:#f4f4f4;border-radius:6px;font-family:ui-monospace,monospace">'
-        "Klicka på kartan…"
+        "Laddar karta…"
         "</div>"
         "<p style=\"margin-top:8px\">"
         '<button type="button" id="galago-copy-coords" disabled>Kopiera lat och lon</button>'
         '<span id="galago-copy-msg" style="margin-left:8px;font-size:0.9rem;color:#063"></span>'
         "</p></div>"
-        '<script src="' + js_leaflet + '"></script>'
-        '<script src="' + js_map + '"></script>'
     )
+
+
+def _map_head_html(demo_dir: Path) -> str:
+    """Leaflet CSS in document head (Gradio 4.44 blocks gr.HTML script tags)."""
+    leaflet_css = demo_dir / "vendor" / "leaflet" / "leaflet.css"
+    if not leaflet_css.is_file():
+        return ""
+    css_url = _gradio_file_url(leaflet_css)
+    return f'<link rel="stylesheet" href="{css_url}" data-galago-leaflet="1" />'
+
+
+def _map_blocks_js(demo_dir: Path) -> str:
+    """Blocks(js=...) loader: fetch Leaflet + galago_map.js from /file= after Gradio mounts."""
+    leaflet_js = demo_dir / "vendor" / "leaflet" / "leaflet.js"
+    map_js = demo_dir / "galago_map.js"
+    if not leaflet_js.is_file() or not map_js.is_file():
+        return "() => { const o = document.getElementById('galago-coord-out'); if (o) o.textContent = 'Kartfiler saknas.'; }"
+    u_leaflet = _gradio_file_url(leaflet_js)
+    u_map = _gradio_file_url(map_js)
+    return f"""() => {{
+  if (window.__galagoMapLoaderStarted) return;
+  window.__galagoMapLoaderStarted = true;
+  function loadScript(src) {{
+    return new Promise(function (resolve, reject) {{
+      var s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    }});
+  }}
+  function fail() {{
+    var o = document.getElementById('galago-coord-out');
+    if (o) o.textContent = 'Kartan kunde inte laddas. Välj förvald plats eller fyll i lat/long.';
+  }}
+  loadScript('{u_leaflet}')
+    .then(function () {{ return loadScript('{u_map}'); }})
+    .catch(fail);
+}}"""
 
 
 def row_to_markdown(r: dict) -> str:
@@ -475,8 +496,11 @@ def main() -> None:
 
     species_observer_choices = _load_observer_species_choices()
 
-    with gr.Blocks(title="Galago call demo") as demo:
-        demo_dir = Path(__file__).resolve().parent
+    demo_dir = Path(__file__).resolve().parent
+    map_head = _map_head_html(demo_dir)
+    map_js = _map_blocks_js(demo_dir)
+
+    with gr.Blocks(title="Galago call demo", head=map_head or None, js=map_js) as demo:
         gr.Markdown(
             "# Galago — akustisk demo\n\n"
             "Ladda en **galago-.wav** (mono/stereo spelar mindre roll; modellen fönstrar signalen). "
@@ -514,7 +538,7 @@ def main() -> None:
         )
 
         with gr.Accordion("Plats och karta", open=True):
-            gr.HTML(_map_embed_html(demo_dir))
+            gr.HTML(_map_shell_html())
             no_location = gr.Checkbox(
                 value=False,
                 label="Ingen plats — skicka inte lat/long till kontext (bara akustik + profiler)",

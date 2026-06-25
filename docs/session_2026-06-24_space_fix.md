@@ -15,8 +15,8 @@ Handover efter Space-fix, demo-test och modellförbättringsstart.
 
 ### Kartfix (commit följer denna session)
 
-- Leaflet **vendored** under `demo/vendor/leaflet/` (inga CDN-skript i HTML)
-- Kartlogik i `demo/galago_map.js`, laddad via Gradio **`/file=`** (externa script-taggar, inte inline)
+- Leaflet **vendored** under `demo/vendor/leaflet/`
+- **v3:** `gr.HTML` har bara div-markup; Leaflet laddas via `gr.Blocks(head=…)` + `gr.Blocks(js=…)` (Gradio 4.44 strippar `<script>` i HTML-komponenten)
 - Klick uppdaterar `galago_lat`, `galago_lon`, `galago_paste_coords` automatiskt
 - Karttiles fortfarande från Carto CDN (OSM 403 i embed)
 
