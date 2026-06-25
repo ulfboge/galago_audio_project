@@ -167,8 +167,8 @@ def _map_shell_html() -> str:
         "<p><strong>Karta</strong> — klicka för lat/lon (WGS84, decimalgrader). "
         "Klick uppdaterar fälten <em>Latitude</em>, <em>Longitude</em> och "
         "<em>Klistra koordinater</em> nedan.</p>"
-        "<div id=\"galago-map-wrap\">"
-        '<div id="galago-map" style="height:400px;border:1px solid #ccc;border-radius:8px;max-width:100%;min-height:400px;background:#e8e8e8"></div>'
+        "<div id=\"galago-map-wrap\" style=\"width:100%\">"
+        '<div id="galago-map" class="galago-map-host"></div>'
         '<div id="galago-coord-out" style="margin-top:10px;padding:10px;background:#f4f4f4;border-radius:6px;font-family:ui-monospace,monospace">'
         "Laddar karta…"
         "</div>"
@@ -177,6 +177,27 @@ def _map_shell_html() -> str:
         '<span id="galago-copy-msg" style="margin-left:8px;font-size:0.9rem;color:#063"></span>'
         "</p></div>"
     )
+
+
+def _map_blocks_css() -> str:
+    """Leaflet needs explicit host + container sizing (Gradio layout mounts late)."""
+    return """
+.galago-map-host {
+  height: 400px !important;
+  width: 100% !important;
+  min-height: 400px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #e8e8e8;
+  position: relative;
+  z-index: 1;
+}
+.galago-map-host .leaflet-container {
+  height: 100% !important;
+  width: 100% !important;
+  font-family: inherit;
+}
+"""
 
 
 def _map_head_html(demo_dir: Path) -> str:
@@ -212,9 +233,12 @@ def _map_blocks_js(demo_dir: Path) -> str:
     var o = document.getElementById('galago-coord-out');
     if (o) o.textContent = 'Kartan kunde inte laddas. Välj förvald plats eller fyll i lat/long.';
   }}
-  loadScript('{u_leaflet}')
-    .then(function () {{ return loadScript('{u_map}'); }})
-    .catch(fail);
+  function boot() {{
+    loadScript('{u_leaflet}')
+      .then(function () {{ return loadScript('{u_map}'); }})
+      .catch(fail);
+  }}
+  setTimeout(boot, 600);
 }}"""
 
 
@@ -500,7 +524,12 @@ def main() -> None:
     map_head = _map_head_html(demo_dir)
     map_js = _map_blocks_js(demo_dir)
 
-    with gr.Blocks(title="Galago call demo", head=map_head or None, js=map_js) as demo:
+    with gr.Blocks(
+        title="Galago call demo",
+        head=map_head or None,
+        js=map_js,
+        css=_map_blocks_css(),
+    ) as demo:
         gr.Markdown(
             "# Galago — akustisk demo\n\n"
             "Ladda en **galago-.wav** (mono/stereo spelar mindre roll; modellen fönstrar signalen). "

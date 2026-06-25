@@ -1,7 +1,5 @@
-/* Galago demo map — loaded after Leaflet via galago_map_boot (see upload_predict_gradio.py). */
+/* Galago demo map — see upload_predict_gradio.py (Blocks head/js + this file). */
 (function () {
-  if (window.__galagoMapBooted) return;
-
   function setGradioField(elemId, value) {
     var root = document.getElementById(elemId);
     if (!root) return;
@@ -20,8 +18,18 @@
     setGradioField("galago_lon", lo);
   }
 
+  function fixMapSize(map, el) {
+    try {
+      if (el) {
+        el.style.height = "400px";
+        el.style.width = "100%";
+      }
+      map.invalidateSize({ pan: false });
+    } catch (e) {}
+  }
+
   function initMap() {
-    window.__galagoMapBooted = true;
+    if (window.__galagoMapBooted) return;
     var out = document.getElementById("galago-coord-out");
     if (typeof L === "undefined") {
       if (out) {
@@ -32,6 +40,10 @@
     }
     var el = document.getElementById("galago-map");
     if (!el) return;
+
+    window.__galagoMapBooted = true;
+    el.style.height = "400px";
+    el.style.width = "100%";
 
     var map = L.map(el, { scrollWheelZoom: true }).setView([-5, 25], 4);
     L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
@@ -77,23 +89,53 @@
       };
     }
 
-    function fixSize() {
-      try { map.invalidateSize(); } catch (e) {}
+    if (out) {
+      out.textContent = "Klicka på kartan för lat/lon (WGS84, decimalgrader).";
     }
-    setTimeout(fixSize, 100);
-    setTimeout(fixSize, 800);
-    window.addEventListener("resize", fixSize);
+
+    function reflow() {
+      fixMapSize(map, el);
+    }
+    reflow();
+    requestAnimationFrame(reflow);
+    setTimeout(reflow, 100);
+    setTimeout(reflow, 400);
+    setTimeout(reflow, 1000);
+    setTimeout(reflow, 2500);
+    window.addEventListener("resize", reflow);
+    if (typeof ResizeObserver !== "undefined") {
+      var ro = new ResizeObserver(reflow);
+      ro.observe(el);
+      var wrap = document.getElementById("galago-map-wrap");
+      if (wrap) ro.observe(wrap);
+    }
   }
 
-  function waitForMap(attempts) {
-    if (document.getElementById("galago-map")) {
+  function sized(el) {
+    return el && el.clientWidth >= 80 && el.clientHeight >= 80;
+  }
+
+  function waitForSizedMap(attempts) {
+    var el = document.getElementById("galago-map");
+    if (sized(el)) {
       initMap();
       return;
     }
-    if (attempts > 0) {
-      setTimeout(function () { waitForMap(attempts - 1); }, 250);
+    if (el && attempts > 0) {
+      el.style.height = "400px";
+      el.style.width = "100%";
     }
+    if (attempts > 0) {
+      setTimeout(function () { waitForSizedMap(attempts - 1); }, 200);
+      return;
+    }
+    if (el) {
+      initMap();
+      return;
+    }
+    var out = document.getElementById("galago-coord-out");
+    if (out) out.textContent = "Kartcontainern hittades inte.";
   }
 
-  waitForMap(80);
+  waitForSizedMap(100);
 })();
