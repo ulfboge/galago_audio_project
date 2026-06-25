@@ -9,8 +9,8 @@ Run from repo root:
 
 Port: defaults to 7860, or set GRADIO_SERVER_PORT. If 7860 is busy, tries 7861–7869.
 
-The map runs in an iframe (galago_map_embed.html) so Leaflet gets a stable layout on HF Spaces.
-Clicks postMessage to the parent page and update lat/long fields — or use **Förvald plats** / manual entry.
+The map runs in an iframe at `/galago-map` (FastAPI route + vendored Leaflet).
+Clicks update lat/long fields via same-origin parent DOM — or use **Förvald plats** / manual entry.
 
 Predictions append to demo/logs/predictions.jsonl when logging is on (see demo_prediction_log.py):
 operational top-3, full acoustic_top10_parsed, acoustic_1..3_*, acoustic_rank_Paragalago_rondoensis.
@@ -161,17 +161,139 @@ def _gradio_file_url(path: Path) -> str:
     return "/file=" + str(path.resolve()).replace("\\", "/")
 
 
-def _map_shell_html(demo_dir: Path) -> str:
-    """Iframe embed — isolated document avoids Gradio/Leaflet layout conflicts."""
-    embed = demo_dir / "galago_map_embed.html"
-    if not embed.is_file():
-        return "<p><em>Kartfil saknas:</em> <code>demo/galago_map_embed.html</code></p>"
-    src = _gradio_file_url(embed)
+def _map_iframe_document_html() -> str:
+    """Standalone map page served at /galago-map (vendored Leaflet, same-origin parent DOM)."""
+    return """<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <title>Galago platskarta</title>
+  <link rel="stylesheet" href="/galago-static/leaflet/leaflet.css" />
+  <script src="/galago-static/leaflet/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+    #map { width: 100%; height: 100%; min-height: 400px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script>
+  (function () {
+    function parentEl(id) {
+      try { return window.parent.document.getElementById(id); } catch (e) { return null; }
+    }
+    function setField(elemId, value) {
+      var root = parentEl(elemId);
+      if (!root) return;
+      var inp = root.querySelector("textarea, input");
+      if (!inp) return;
+      inp.value = value;
+      inp.dispatchEvent(new Event("input", { bubbles: true }));
+      inp.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    function wireCopyButton() {
+      var copyBtn = parentEl("galago-copy-coords");
+      if (!copyBtn || copyBtn.__galagoWired) return;
+      copyBtn.__galagoWired = true;
+      copyBtn.addEventListener("click", function () {
+        var c = window.parent.__galagoLastCoords;
+        if (!c) return;
+        var line = c.lat + "\\t" + c.lon;
+        var copyMsg = parentEl("galago-copy-msg");
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(line).then(function () {
+            if (copyMsg) copyMsg.textContent = "Kopierat!";
+          }).catch(function () {
+            if (copyMsg) copyMsg.textContent = "Kunde inte kopiera — markera siffrorna manuellt.";
+          });
+        } else if (copyMsg) {
+          copyMsg.textContent = "Ingen clipboard-API — kopiera från rutan ovan.";
+        }
+      });
+    }
+    function pushCoords(la, lo) {
+      setField("galago_paste_coords", la + ", " + lo);
+      setField("galago_lat", la);
+      setField("galago_lon", lo);
+      try { window.parent.__galagoLastCoords = { lat: la, lon: lo }; } catch (e) {}
+      var out = parentEl("galago-coord-out");
+      if (out) {
+        out.innerHTML =
+          "<strong>Latitude:</strong> " + la + "<br><strong>Longitude:</strong> " + lo +
+          "<br><small>Fälten nedan uppdaterades automatiskt.</small>";
+      }
+      var copyBtn = parentEl("galago-copy-coords");
+      if (copyBtn) copyBtn.disabled = false;
+    }
+    function setReady() {
+      var out = parentEl("galago-coord-out");
+      if (out) out.textContent = "Klicka på kartan för lat/lon (WGS84, decimalgrader).";
+      wireCopyButton();
+    }
+
+    var map = L.map("map", { scrollWheelZoom: true }).setView([-5, 25], 4);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
+      maxZoom: 20,
+      subdomains: "abcd",
+      attribution: "&copy; OpenStreetMap &copy; CARTO",
+    }).addTo(map);
+
+    var marker = null;
+    map.on("click", function (e) {
+      var la = e.latlng.lat.toFixed(6);
+      var lo = e.latlng.lng.toFixed(6);
+      if (marker) map.removeLayer(marker);
+      marker = L.marker(e.latlng).addTo(map);
+      pushCoords(la, lo);
+    });
+
+    function reflow() {
+      try { map.invalidateSize({ pan: false }); } catch (e) {}
+    }
+    reflow();
+    requestAnimationFrame(reflow);
+    setTimeout(reflow, 150);
+    setTimeout(reflow, 600);
+    setTimeout(function () { reflow(); setReady(); }, 1200);
+    window.addEventListener("resize", reflow);
+  })();
+  </script>
+</body>
+</html>"""
+
+
+def _register_map_routes(demo, demo_dir: Path) -> None:
+    """Serve map HTML + vendored Leaflet on the Gradio FastAPI app (reliable on HF Spaces)."""
+    leaflet_dir = demo_dir / "vendor" / "leaflet"
+    if not (leaflet_dir / "leaflet.js").is_file():
+        return
+
+    from fastapi.responses import HTMLResponse
+    from starlette.staticfiles import StaticFiles
+
+    app = demo.app
+    if not getattr(app.state, "galago_map_routes", False):
+        app.mount(
+            "/galago-static/leaflet",
+            StaticFiles(directory=str(leaflet_dir)),
+            name="galago_leaflet_vendor",
+        )
+
+        @app.get("/galago-map", include_in_schema=False)
+        def _galago_map_page():
+            return HTMLResponse(_map_iframe_document_html())
+
+        app.state.galago_map_routes = True
+
+
+def _map_shell_html() -> str:
+    """Iframe to /galago-map — isolated layout; iframe JS updates parent lat/lon fields."""
     return (
         "<p><strong>Karta</strong> — klicka för lat/lon (WGS84, decimalgrader). "
         "Klick uppdaterar fälten <em>Latitude</em>, <em>Longitude</em> och "
-        "<em>Klistra koordinater</em> nedan.</p>"
-        f'<iframe id="galago-map-iframe" title="Välj plats på kartan" src="{src}" '
+        "<em>Klistra koordinater</em> nedan. "
+        "<a href=\"/galago-map\" target=\"_blank\" rel=\"noopener\">Öppna karta i ny flik</a> om rutan är tom.</p>"
+        '<iframe id="galago-map-iframe" title="Välj plats på kartan" src="/galago-map" '
         'style="width:100%;height:420px;border:1px solid #ccc;border-radius:8px;display:block;background:#e8e8e8">'
         "</iframe>"
         '<div id="galago-coord-out" style="margin-top:10px;padding:10px;background:#f4f4f4;border-radius:6px;font-family:ui-monospace,monospace">'
@@ -182,74 +304,6 @@ def _map_shell_html(demo_dir: Path) -> str:
         '<span id="galago-copy-msg" style="margin-left:8px;font-size:0.9rem;color:#063"></span>'
         "</p>"
     )
-
-
-def _map_blocks_js() -> str:
-    """Parent bridge: iframe postMessage → Gradio lat/lon fields."""
-    return """() => {
-  if (window.__galagoMapBridge) return;
-  window.__galagoMapBridge = true;
-  window.__galagoLastCoords = null;
-
-  function setGradioField(elemId, value) {
-    var root = document.getElementById(elemId);
-    if (!root) return;
-    var inp = root.querySelector("textarea, input");
-    if (!inp) return;
-    inp.value = value;
-    inp.dispatchEvent(new Event("input", { bubbles: true }));
-    inp.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  function pushCoords(lat, lon) {
-    var la = Number(lat).toFixed(6);
-    var lo = Number(lon).toFixed(6);
-    setGradioField("galago_paste_coords", la + ", " + lo);
-    setGradioField("galago_lat", la);
-    setGradioField("galago_lon", lo);
-    window.__galagoLastCoords = { lat: la, lon: lo };
-    var copyBtn = document.getElementById("galago-copy-coords");
-    if (copyBtn) copyBtn.disabled = false;
-  }
-
-  window.addEventListener("message", function (e) {
-    if (!e.data || !e.data.type) return;
-    if (e.data.type === "galago-map-ready") {
-      var out = document.getElementById("galago-coord-out");
-      if (out) out.textContent = "Klicka på kartan för lat/lon (WGS84, decimalgrader).";
-      return;
-    }
-    if (e.data.type !== "galago-map-click") return;
-    pushCoords(e.data.lat, e.data.lon);
-    var out = document.getElementById("galago-coord-out");
-    if (out) {
-      out.innerHTML =
-        "<strong>Latitude:</strong> " + e.data.lat +
-        "<br><strong>Longitude:</strong> " + e.data.lon +
-        "<br><small>Fälten nedan uppdaterades automatiskt.</small>";
-    }
-    var copyMsg = document.getElementById("galago-copy-msg");
-    if (copyMsg) copyMsg.textContent = "";
-  });
-
-  document.addEventListener("click", function (ev) {
-    var btn = ev.target;
-    if (!btn || btn.id !== "galago-copy-coords") return;
-    var c = window.__galagoLastCoords;
-    if (!c) return;
-    var line = c.lat + "\\t" + c.lon;
-    var copyMsg = document.getElementById("galago-copy-msg");
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(line).then(function () {
-        if (copyMsg) copyMsg.textContent = "Kopierat!";
-      }).catch(function () {
-        if (copyMsg) copyMsg.textContent = "Kunde inte kopiera — markera siffrorna manuellt.";
-      });
-    } else if (copyMsg) {
-      copyMsg.textContent = "Ingen clipboard-API — kopiera från rutan ovan.";
-    }
-  });
-}"""
 
 
 def row_to_markdown(r: dict) -> str:
@@ -531,12 +585,8 @@ def main() -> None:
     species_observer_choices = _load_observer_species_choices()
 
     demo_dir = Path(__file__).resolve().parent
-    map_js = _map_blocks_js()
 
-    with gr.Blocks(
-        title="Galago call demo",
-        js=map_js,
-    ) as demo:
+    with gr.Blocks(title="Galago call demo") as demo:
         gr.Markdown(
             "# Galago — akustisk demo\n\n"
             "Ladda en **galago-.wav** (mono/stereo spelar mindre roll; modellen fönstrar signalen). "
@@ -574,7 +624,7 @@ def main() -> None:
         )
 
         with gr.Accordion("Plats och karta", open=True):
-            gr.HTML(_map_shell_html(demo_dir))
+            gr.HTML(_map_shell_html())
             no_location = gr.Checkbox(
                 value=False,
                 label="Ingen plats — skicka inte lat/long till kontext (bara akustik + profiler)",
@@ -827,14 +877,15 @@ def main() -> None:
 
         clear_session_btn.click(_clear_session, outputs=[session_hist, session_df])
 
+    _register_map_routes(demo, demo_dir)
+
     base = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
-    demo_dir = str(Path(__file__).resolve().parent)
     for port in range(base, base + 10):
         try:
             demo.launch(
                 server_name="0.0.0.0",
                 server_port=port,
-                allowed_paths=[demo_dir],
+                allowed_paths=[str(demo_dir)],
                 show_api=False,
             )
             break
