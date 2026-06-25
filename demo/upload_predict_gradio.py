@@ -262,8 +262,8 @@ def _map_iframe_document_html() -> str:
 </html>"""
 
 
-def _register_map_routes(demo, demo_dir: Path) -> None:
-    """Serve map HTML + vendored Leaflet on the Gradio FastAPI app (reliable on HF Spaces)."""
+def _register_map_routes(app, demo_dir: Path) -> None:
+    """Serve map HTML + vendored Leaflet on the outer FastAPI app (survives Gradio launch)."""
     leaflet_dir = demo_dir / "vendor" / "leaflet"
     if not (leaflet_dir / "leaflet.js").is_file():
         return
@@ -271,7 +271,6 @@ def _register_map_routes(demo, demo_dir: Path) -> None:
     from fastapi.responses import HTMLResponse
     from starlette.staticfiles import StaticFiles
 
-    app = demo.app
     if not getattr(app.state, "galago_map_routes", False):
         app.mount(
             "/galago-static/leaflet",
@@ -877,17 +876,31 @@ def main() -> None:
 
         clear_session_btn.click(_clear_session, outputs=[session_hist, session_df])
 
-    _register_map_routes(demo, demo_dir)
+    from fastapi import FastAPI
+
+    fastapi_app = FastAPI()
+    _register_map_routes(fastapi_app, demo_dir)
+
+    # Gradio launch() recreates demo.app and drops routes registered earlier — mount on outer app.
+    app = gr.mount_gradio_app(
+        fastapi_app,
+        demo,
+        path="",
+        allowed_paths=[str(demo_dir)],
+        show_api=False,
+        app_kwargs={
+            "docs_url": None,
+            "redoc_url": None,
+            "openapi_url": None,
+        },
+    )
 
     base = int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
     for port in range(base, base + 10):
         try:
-            demo.launch(
-                server_name="0.0.0.0",
-                server_port=port,
-                allowed_paths=[str(demo_dir)],
-                show_api=False,
-            )
+            import uvicorn
+
+            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
             break
         except OSError as e:
             err = str(e).lower()
