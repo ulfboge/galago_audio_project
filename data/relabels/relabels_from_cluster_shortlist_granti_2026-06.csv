@@ -1,0 +1,2 @@
+wav_path,start_sec,end_sec,species,population,notes
+C:\Users\galag\GitHub\galago_audio_project\data\raw_audio\Paragalago_granti\Incremental call  G granti.wav,,,Paragalago_granti,,stub from cluster shortlist; folder_label=Paragalago_granti; output=Paragalago_rondoensis; top1=Paragalago_rondoensis p1=1.000; EDIT species + add start/end if needed

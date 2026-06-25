@@ -156,119 +156,45 @@ def _load_site_presets() -> list[dict]:
     return data
 
 
-def _map_embed_html() -> str:
+def _gradio_file_url(path: Path) -> str:
+    """Gradio 4.x /file= route for assets under allowed_paths."""
+    return "/file=" + str(path.resolve()).replace("\\", "/")
+
+
+def _map_embed_html(demo_dir: Path) -> str:
     """
-    Leaflet map inlined in the Gradio page (not a data-URL iframe).
+    Leaflet via local vendor files + external galago_map.js (no inline <script>).
 
-    HF Spaces / modern browsers often block external scripts inside sandboxed
-    data: iframes, so map clicks never fired. Same-origin embed + CDN Leaflet works.
+    Gradio 4.44 on HF Spaces strips inline scripts in gr.HTML; external /file= scripts work.
     """
-    return """
-<p><strong>Karta</strong> — klicka för lat/lon (WGS84, decimalgrader).
-Klick uppdaterar fälten <em>Latitude</em>, <em>Longitude</em> och <em>Klistra koordinater</em> nedan.</p>
-<div id="galago-map-wrap">
-  <div id="galago-map" style="height:400px;border:1px solid #ccc;border-radius:8px;max-width:100%"></div>
-  <div id="galago-coord-out" style="margin-top:10px;padding:10px;background:#f4f4f4;border-radius:6px;font-family:ui-monospace,monospace">
-    Klicka på kartan…
-  </div>
-  <p style="margin-top:8px">
-    <button type="button" id="galago-copy-coords" disabled>Kopiera lat och lon</button>
-    <span id="galago-copy-msg" style="margin-left:8px;font-size:0.9rem;color:#063"></span>
-  </p>
-</div>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" crossorigin="anonymous" />
-<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin="anonymous"></script>
-<script>
-(function () {
-  if (window.__galagoMapBooted) return;
-  window.__galagoMapBooted = true;
-
-  function setGradioField(elemId, value) {
-    var root = document.getElementById(elemId);
-    if (!root) return;
-    var inp = root.querySelector("textarea, input");
-    if (!inp) return;
-    inp.value = value;
-    inp.dispatchEvent(new Event("input", { bubbles: true }));
-    inp.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  function pushCoords(lat, lon) {
-    var la = Number(lat).toFixed(6);
-    var lo = Number(lon).toFixed(6);
-    setGradioField("galago_paste_coords", la + ", " + lo);
-    setGradioField("galago_lat", la);
-    setGradioField("galago_lon", lo);
-  }
-
-  function initMap() {
-    var out = document.getElementById("galago-coord-out");
-    if (typeof L === "undefined") {
-      if (out) {
-        out.textContent =
-          "Kartan kunde inte laddas (Leaflet blockerad). Välj förvald plats eller fyll i lat/long manuellt.";
-      }
-      return;
-    }
-    var map = L.map("galago-map", { scrollWheelZoom: true }).setView([-5, 25], 4);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png", {
-      maxZoom: 20,
-      subdomains: "abcd",
-      attribution: "&copy; OpenStreetMap &copy; CARTO",
-    }).addTo(map);
-    var marker = null;
-    var lastLa = null;
-    var lastLo = null;
-    var copyBtn = document.getElementById("galago-copy-coords");
-    var copyMsg = document.getElementById("galago-copy-msg");
-
-    map.on("click", function (e) {
-      lastLa = e.latlng.lat.toFixed(6);
-      lastLo = e.latlng.lng.toFixed(6);
-      if (marker) map.removeLayer(marker);
-      marker = L.marker(e.latlng).addTo(map);
-      if (out) {
-        out.innerHTML =
-          "<strong>Latitude:</strong> " + lastLa + "<br><strong>Longitude:</strong> " + lastLo +
-          "<br><small>Fälten nedan uppdaterades automatiskt.</small>";
-      }
-      if (copyBtn) copyBtn.disabled = false;
-      if (copyMsg) copyMsg.textContent = "";
-      pushCoords(lastLa, lastLo);
-    });
-
-    if (copyBtn) {
-      copyBtn.onclick = function () {
-        if (lastLa === null) return;
-        var line = lastLa + "\\t" + lastLo;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(line).then(function () {
-            if (copyMsg) copyMsg.textContent = "Kopierat!";
-          }).catch(function () {
-            if (copyMsg) copyMsg.textContent = "Kunde inte kopiera — markera siffrorna manuellt.";
-          });
-        } else if (copyMsg) {
-          copyMsg.textContent = "Ingen clipboard-API — kopiera från rutan ovan.";
-        }
-      };
-    }
-
-    function fixSize() {
-      try { map.invalidateSize(); } catch (e) {}
-    }
-    setTimeout(fixSize, 100);
-    setTimeout(fixSize, 800);
-    window.addEventListener("resize", fixSize);
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initMap);
-  } else {
-    initMap();
-  }
-})();
-</script>
-"""
+    leaflet_css = demo_dir / "vendor" / "leaflet" / "leaflet.css"
+    leaflet_js = demo_dir / "vendor" / "leaflet" / "leaflet.js"
+    map_js = demo_dir / "galago_map.js"
+    if not leaflet_js.is_file() or not map_js.is_file():
+        return (
+            "<p><em>Kartfiler saknas under <code>demo/vendor/leaflet/</code>. "
+            "Välj <strong>Förvald plats</strong> eller fyll i lat/long manuellt.</em></p>"
+        )
+    css_url = _gradio_file_url(leaflet_css)
+    js_leaflet = _gradio_file_url(leaflet_js)
+    js_map = _gradio_file_url(map_js)
+    return (
+        "<p><strong>Karta</strong> — klicka för lat/lon (WGS84, decimalgrader). "
+        "Klick uppdaterar fälten <em>Latitude</em>, <em>Longitude</em> och "
+        "<em>Klistra koordinater</em> nedan.</p>"
+        '<link rel="stylesheet" href="' + css_url + '" />'
+        "<div id=\"galago-map-wrap\">"
+        '<div id="galago-map" style="height:400px;border:1px solid #ccc;border-radius:8px;max-width:100%"></div>'
+        '<div id="galago-coord-out" style="margin-top:10px;padding:10px;background:#f4f4f4;border-radius:6px;font-family:ui-monospace,monospace">'
+        "Klicka på kartan…"
+        "</div>"
+        "<p style=\"margin-top:8px\">"
+        '<button type="button" id="galago-copy-coords" disabled>Kopiera lat och lon</button>'
+        '<span id="galago-copy-msg" style="margin-left:8px;font-size:0.9rem;color:#063"></span>'
+        "</p></div>"
+        '<script src="' + js_leaflet + '"></script>'
+        '<script src="' + js_map + '"></script>'
+    )
 
 
 def row_to_markdown(r: dict) -> str:
@@ -550,6 +476,7 @@ def main() -> None:
     species_observer_choices = _load_observer_species_choices()
 
     with gr.Blocks(title="Galago call demo") as demo:
+        demo_dir = Path(__file__).resolve().parent
         gr.Markdown(
             "# Galago — akustisk demo\n\n"
             "Ladda en **galago-.wav** (mono/stereo spelar mindre roll; modellen fönstrar signalen). "
@@ -587,7 +514,7 @@ def main() -> None:
         )
 
         with gr.Accordion("Plats och karta", open=True):
-            gr.HTML(_map_embed_html())
+            gr.HTML(_map_embed_html(demo_dir))
             no_location = gr.Checkbox(
                 value=False,
                 label="Ingen plats — skicka inte lat/long till kontext (bara akustik + profiler)",

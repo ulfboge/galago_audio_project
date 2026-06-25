@@ -18,6 +18,8 @@ __pycache__/
 audio_clips/
 data/**
 !data/species_ranges.json
+!data/relabels/
+!data/relabels/**
 
 # Gradio demo append-only log (delete this line if you want to commit test runs)
 demo/logs/predictions.jsonl

@@ -1,0 +1,4 @@
+wav_path,start_sec,end_sec,species,population,notes,ingest
+data/raw_audio/Paragalago_granti/Incremental call  G granti.wav,,,Paragalago_granti,,incremental call; demo predicted rondoensis p=1.0; lat/lon -1.3 36.8,yes
+data/raw_audio/Paragalago_granti/Buzz  G granti.wav,,,Paragalago_granti,,buzz call type; granti folder label,yes
+data/raw_audio/Paragalago_granti/Buzz-Screech+ Grunt G granti.wav,,,Paragalago_granti,,buzz-screech+grunt; granti folder label,yes
