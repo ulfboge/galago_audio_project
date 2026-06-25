@@ -580,14 +580,14 @@ def _patch_gradio_app_for_map(demo_dir: Path) -> None:
     if getattr(App, "_galago_map_patch_applied", False):
         return
 
-    _orig = App.create_app
+    _orig = App.create_app.__func__
 
     def _create_app_with_map(*args, **kwargs):
         app = _orig(*args, **kwargs)
         _register_map_routes(app, demo_dir)
         return app
 
-    App.create_app = _create_app_with_map
+    App.create_app = staticmethod(_create_app_with_map)
     App._galago_map_patch_applied = True
 
 
