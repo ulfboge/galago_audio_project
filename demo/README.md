@@ -22,7 +22,7 @@ Open **http://127.0.0.1:7860** in your browser.
 - **Format:** *decimalgrader* (WGS84), t.ex. lat `-13.9626`, lon `33.7741`. **Inte** grader/minuter/sekunder (DMS). Om du bara har DMS, konvertera först (t.ex. i GIS eller sökmotor).
 - **Förvald plats:** rullistan fyller lat/long (redigerbara efteråt).
 - **Ingen plats:** bocka *Ingen plats — skicka inte lat/long…* så används ingen koordinat för kontext (samma som att lämna fält tomma och inte välja en punkt med riktiga värden).
-- **Karta:** öppna **`demo/pick_location_map.html`** i webbläsaren (dubbelklick i Utforskaren), klicka på kartan, kopiera siffrorna till fälten i Gradio.
+- **Karta (inbäddad i Gradio):** klicka i kart-rutan under *Plats och karta* — lat/long fylls automatiskt. Route `/galago-map` (Leaflet vendored). Fallback: **Förvald plats** eller **`demo/pick_location_map.html`** i separat flik.
 
 ## Testlogg (filnamn + förslag)
 

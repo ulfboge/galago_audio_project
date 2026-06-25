@@ -1,7 +1,9 @@
 # Galago Audio Project - Task List for Microsoft To Do
 
-**Last Updated**: January 8, 2026  
-**Status**: Ready for implementation
+**Last Updated**: June 25, 2026  
+**Status**: Live HF demo; model iteration via relabel + retrain
+
+**Current sprint (juni 2026):** Se `docs/next_steps_2026-06-24.md` och `CLAUDE.md` § Utvecklingsfas. HF Space ✅. Karta ✅. Incremental granti + Hub-vikter ⚠️.
 
 This document contains a comprehensive list of tasks organized by priority for the Galago Acoustic Species Classifier project. Use this to populate your Microsoft To Do list and track progress.
 
