@@ -45,6 +45,8 @@ MIN_WINDOWS = 1
 RMS_GATE_REL = 0.20          # keep windows with rms >= max_rms * RMS_GATE_REL
 RMS_GATE_ABS = 1e-4          # always drop near-silence windows
 POOL_TOPK_WINDOWS = 3        # number of windows to pool across after gating
+# When pooled top-K windows disagree (mixed lead-in + call), re-pool from the file tail.
+POOL_CONFLICT_TAIL_FALLBACK = True
 
 # Simple temporal consistency rule (optional):
 # require the same top-1 class to appear in at least N of the pooled windows
@@ -220,6 +222,25 @@ def predict_detector(detector_model, wav_path: Path) -> tuple:
     avg_not_galago_prob = float(np.mean(probs_list))
     return avg_not_galago_prob, len(probs_list)
 
+def _pool_window_probs(
+    probs_list: list,
+    conf_list: list,
+    top1_idx_list: list,
+    k: int,
+) -> tuple[np.ndarray | None, list | None, int | None]:
+    """Mean-pool the top-K most confident window probability vectors."""
+    k = min(k, len(probs_list))
+    if k <= 0:
+        return None, None, None
+    top_idx = np.argsort(np.asarray(conf_list))[-k:]
+    selected = [probs_list[i] for i in top_idx]
+    selected_top1_idx = [top1_idx_list[i] for i in top_idx]
+    avg_probs = np.mean(selected, axis=0)
+    s = float(np.sum(avg_probs))
+    if s > 0:
+        avg_probs = avg_probs / s
+    return avg_probs, selected_top1_idx, k
+
 def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> tuple:
     try:
         y, sr = librosa.load(str(wav_path), sr=SR)
@@ -232,7 +253,8 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
     probs_list = []
     conf_list = []
     top1_idx_list = []
-    
+    window_starts_used: list[int] = []
+
     for start in starts:
         end = start + int(WINDOW_SEC * sr)
         if end > len(y):
@@ -246,22 +268,39 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
         probs_list.append(probs)
         conf_list.append(float(np.max(probs)))
         top1_idx_list.append(int(np.argmax(probs)))
-    
+        window_starts_used.append(start)
+
     if not probs_list:
         return None, 0, None
-    
+
     # Pool only the top-K most confident windows (avoid diluting with weak/noisy windows)
     k = min(POOL_TOPK_WINDOWS, len(probs_list))
-    if k <= 0:
+    avg_probs, selected_top1_idx, pooled_k = _pool_window_probs(
+        probs_list, conf_list, top1_idx_list, k
+    )
+    if avg_probs is None:
         return None, 0, None
-    top_idx = np.argsort(np.asarray(conf_list))[-k:]
-    selected = [probs_list[i] for i in top_idx]
-    selected_top1_idx = [top1_idx_list[i] for i in top_idx]
-    avg_probs = np.mean(selected, axis=0)
-    # Safety: normalize (should already sum to 1.0)
-    s = float(np.sum(avg_probs))
-    if s > 0:
-        avg_probs = avg_probs / s
+
+    # Mixed long files: lead-in noise can dominate top-confidence windows.
+    if (
+        globals().get("POOL_CONFLICT_TAIL_FALLBACK", True)
+        and len(set(selected_top1_idx)) > 1
+        and len(y) > int(5.0 * sr)
+    ):
+        tail_cut = max(int(5.0 * sr), len(y) // 2)
+        tail_idx = [i for i, ws in enumerate(window_starts_used) if ws >= tail_cut]
+        if tail_idx:
+            tail_probs = [probs_list[i] for i in tail_idx]
+            tail_conf = [conf_list[i] for i in tail_idx]
+            tail_top1 = [top1_idx_list[i] for i in tail_idx]
+            tail_avg, tail_sel_top1, tail_k = _pool_window_probs(
+                tail_probs, tail_conf, tail_top1, k
+            )
+            if tail_avg is not None:
+                if len(set(tail_sel_top1)) == 1 or len(set(selected_top1_idx)) > 1:
+                    avg_probs = tail_avg
+                    selected_top1_idx = tail_sel_top1
+                    pooled_k = tail_k
 
     # Apply temperature scaling in probability space (approximate logits/T softmax).
     # This improves calibration without changing the argmax.
@@ -273,7 +312,7 @@ def predict_classifier(classifier_model, wav_path: Path, class_names: list) -> t
         if s2 > 0:
             avg_probs = scaled / s2
 
-    return avg_probs, len(starts_all), avg_probs, selected_top1_idx, k
+    return avg_probs, len(starts_all), avg_probs, selected_top1_idx, pooled_k
 
 def topk(probs: np.ndarray, class_names: list, k: int) -> list:
     top_indices = np.argsort(probs)[-k:][::-1]
