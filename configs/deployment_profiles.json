@@ -39,9 +39,10 @@
     "rms_gate_rel": 0.2,
     "rms_gate_abs": 0.0001,
     "consensus_min_count": 0,
-    "context_alpha": 0.5,
+    "context_alpha": 1.0,
     "temperature": 0.212,
-    "notes": "Kenya subset (58 files) tuned for ~80%+ coverage; improves accuracy among covered predictions."
+    "postprocess_mode": "kenya_geo_guard",
+    "notes": "Kenya ops: auto-tuned threshold + strong location context; southern/TZ dwarf galagos not expected in Kenya — see docs/deployment_geographic_assumptions.md."
   },
   "tanzania_balanced": {
     "classifier_threshold": 0.35,
@@ -61,9 +62,10 @@
     "rms_gate_rel": 0.2,
     "rms_gate_abs": 0.0001,
     "consensus_min_count": 0,
-    "context_alpha": 0.5,
+    "context_alpha": 1.0,
     "temperature": 0.212,
-    "notes": "Auto-tuned from corrected Kenya subset (sp.nov moved to Malawi)",
+    "postprocess_mode": "kenya_geo_guard",
+    "notes": "Kenya ops (auto-tuned threshold): kenya_geo_guard suppresses granti/orinus/rondoensis/zanzibaricus when unlikely at lat/lon; pass --postprocess-mode none to disable.",
     "source_csv": "outputs\\predictions\\predictions_3stage_kenya_balanced_v2.csv",
     "target_coverage": 80.0,
     "measured_coverage": 82.35294117647058,

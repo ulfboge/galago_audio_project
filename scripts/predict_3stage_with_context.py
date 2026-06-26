@@ -19,7 +19,12 @@ import re
 
 # Import context re-ranker
 sys.path.insert(0, str(Path(__file__).parent))
-from context_reranker import rerank_predictions, get_location_status, get_location_status_point
+from context_reranker import (
+    rerank_predictions,
+    get_location_prior,
+    get_location_status,
+    get_location_status_point,
+)
 
 # Fix Unicode encoding for Windows
 if sys.platform == 'win32':
@@ -329,6 +334,48 @@ def infer_location_for_file(wav_path: Path) -> tuple[str | None, str]:
     return None, "none"
 
 
+# Southern / TZ coastal dwarf galagos not listed for Kenya in data/species_ranges.json.
+KENYA_EXCLUDED_SPECIES = frozenset(
+    {
+        "Paragalago_granti",
+        "Paragalago_orinus",
+        "Paragalago_rondoensis",
+        "Paragalago_zanzibaricus",
+    }
+)
+
+
+def _is_kenya_context(
+    location_used: str | None,
+    lat: float | None,
+    lon: float | None,
+) -> bool:
+    if location_used and "kenya" in location_used.strip().lower():
+        return True
+    if lat is None or lon is None:
+        return False
+    # Point heuristic: garnettii/cocos plausible in Kenya; TZ endemics often not.
+    if get_location_prior("Otolemur_garnettii", lat=lat, lon=lon) >= 0.5:
+        if get_location_prior("Paragalago_rondoensis", lat=lat, lon=lon) < 0.5:
+            return True
+    if get_location_prior("Paragalago_cocos", lat=lat, lon=lon) >= 0.9:
+        return True
+    return False
+
+
+def _species_location_prior(
+    species: str,
+    location_used: str | None,
+    lat: float | None,
+    lon: float | None,
+) -> float:
+    if lat is not None and lon is not None:
+        return float(get_location_prior(species, lat=lat, lon=lon))
+    if location_used:
+        return float(get_location_prior(species, location=location_used))
+    return 0.5
+
+
 def resolve_class_names_for_classifier(classifier_model) -> tuple[list, Path]:
     """Pick class_names JSON to match classifier output dimension."""
     n_out = int(classifier_model.output_shape[1])
@@ -573,6 +620,55 @@ def run_single_wav(
         if is_tanzania and species_out == "Galagoides_sp_nov":
             species_out = "Paragalago_rondoensis"
             postprocess_action = "spnov_to_rondoensis_aggressive"
+    elif postprocess_mode == "kenya_geo_guard":
+        if _is_kenya_context(location_used, lat_used, lon_used):
+            top_lp = _species_location_prior(
+                best_species, location_used, lat_used, lon_used
+            )
+            needs_guard = (
+                best_species in KENYA_EXCLUDED_SPECIES
+                or location_status == "Unlikely here"
+                or top_lp < 0.5
+            )
+            if needs_guard:
+                pred_list = [(sp, float(p)) for sp, p in t10]
+                reranked = rerank_predictions(
+                    pred_list,
+                    location=location_used,
+                    lat=lat_used,
+                    lon=lon_used,
+                    month=month,
+                    hour=hour,
+                    alpha=context_alpha,
+                )
+                in_range = [
+                    (sp, rp, meta)
+                    for sp, rp, meta in reranked
+                    if float(meta.get("location_prior", 0.0)) >= 0.5
+                    and float(meta.get("original_prob", 0.0)) > 0.0
+                ]
+                if in_range:
+                    alt_sp, alt_rp, alt_meta = in_range[0]
+                    alt_raw = float(alt_meta.get("original_prob", alt_rp))
+                    if alt_raw >= classifier_threshold:
+                        species_out = alt_sp
+                        best_p = alt_rp
+                        threshold_score = alt_raw
+                        if lat_used is not None and lon_used is not None:
+                            location_status = get_location_status_point(
+                                alt_sp, lat=lat_used, lon=lon_used
+                            )
+                        else:
+                            location_status = get_location_status(
+                                alt_sp, location_used
+                            )
+                        postprocess_action = "kenya_geo_in_range_fallback"
+                    else:
+                        species_out = "uncertain"
+                        postprocess_action = "kenya_geo_to_uncertain"
+                else:
+                    species_out = "uncertain"
+                    postprocess_action = "kenya_geo_to_uncertain"
 
     return {
         "filepath": str(wav),
